@@ -8,3 +8,5 @@ node_modules/
 # Sistema
 .env
 .DS_Store
+.vscode/
+
