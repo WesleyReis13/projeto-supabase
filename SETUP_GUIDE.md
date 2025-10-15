@@ -16,7 +16,7 @@ npm install -g supabase
 
 # Clonar este repositório
 git clone https://github.com/WesleyReis13/projeto-supabase.git
-cd ecommerce-supabase-backend
+cd projeto-supabase
 
 # Fazer login no Supabase
 supabase login
