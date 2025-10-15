@@ -73,7 +73,6 @@ Após executar `supabase start`, você terá acesso aos seguintes serviços:
 📊 **Studio Interface:** http://localhost:54323  
 🔗 **API REST:** http://localhost:54321/rest/v1  
 ⚡ **Edge Functions:** http://localhost:54321/functions/v1  
-📧 **Email Testing:** http://localhost:54324 (Mailpit)
 
 ---
 
