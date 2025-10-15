@@ -7,178 +7,171 @@ Functions (Deno) para automação e tarefas serverless.
 
 ## Decisões Chave de Arquitetura
 
--   **Separação de Preços (Imutabilidade):** O preço de venda de um
-    produto é capturado na tabela `order_items` (`price_at_time`),
-    garantindo que alterações futuras no preço do produto original não
-    afetem o valor do pedido já feito.
--   **Abstração de Clientes:** A tabela `profiles` se liga diretamente
-    ao `auth.users` do Supabase via Foreign Key, centralizando a gestão
-    de clientes.
--   **Segurança em Camadas:** O acesso aos dados é rigidamente
-    controlado pelas políticas RLS (Layer 3: Banco de Dados), e as Edge
-    Functions reforçam essa segurança ao inicializar o cliente Supabase
-    com o token do usuário.
+- **Separação de Preços (Imutabilidade):** O preço de venda de um
+  produto é capturado na tabela `order_items` (`price_at_time`),
+  garantindo que alterações futuras no preço do produto original não
+  afetem o valor do pedido já feito.
+
+- **Abstração de Clientes:** A tabela `profiles` se liga diretamente
+  ao `auth.users` do Supabase via Foreign Key, centralizando a gestão
+  de clientes.
+
+- **Segurança em Camadas:** O acesso aos dados é rigidamente
+  controlado pelas políticas RLS (Layer 3: Banco de Dados), e as Edge
+  Functions reforçam essa segurança ao inicializar o cliente Supabase
+  com o token do usuário.
+
+---
 
 # 2. Estrutura de Dados (Tabelas e Relações)
 
 O esquema é normalizado para garantir a integridade dos dados, com UUIDs
 como chaves primárias.
 
-  -----------------------------------------------------------------------------------
-  **Tabela**    **Objetivo**   **Relação Chave Estrangeira**  **Decisão de
-                                                              Integridade**
-  ------------- -------------- ------------------------------ -----------------------
-  profiles      Dados          `id -> auth.users(id)`         `ON DELETE CASCADE`
-                adicionais do  (One-to-One)                   para limpar o perfil
-                usuário                                       caso o usuário seja
-                                                              deletado da Auth.
+### profiles
 
-  products      Catálogo de    ---                            `price >= 0` e
-                produtos                                      `stock_quantity >= 0`
-                                                              garantem integridade
-                                                              dos valores.
+- **Objetivo:** Dados adicionais do usuário.  
+- **Relação:** `id -> auth.users(id)` (One-to-One).  
+- **Decisão de Integridade:** Usa `ON DELETE CASCADE` para limpar o perfil
+  caso o usuário seja deletado da Auth.
 
-  orders        Cabeçalho do   `user_id -> profiles(id)`      Constraint para status
-                pedido                                        (`pending`,
-                                                              `confirmed`, etc.) e
-                                                              `total >= 0`.
+### products
 
-  order_items   Itens de cada  `order_id -> orders(id)`,      Armazena
-                pedido         `product_id -> products(id)`   `price_at_time`
-                                                              (imutável).
-                                                              `ON DELETE CASCADE`
-                                                              limpa os itens.
-  -----------------------------------------------------------------------------------
+- **Objetivo:** Catálogo de produtos.  
+- **Relação:** N/A.  
+- **Decisão de Integridade:** Constraints `price >= 0` e
+  `stock_quantity >= 0` garantem integridade dos valores.
+
+### orders
+
+- **Objetivo:** Cabeçalho do pedido.  
+- **Relação:** `user_id -> profiles(id)`.  
+- **Decisão de Integridade:** Constraint para `status` (pending, confirmed, etc.)
+  e `total >= 0`.
+
+### order_items
+
+- **Objetivo:** Itens de cada pedido.  
+- **Relações:** `order_id -> orders(id)`, `product_id -> products(id)`.  
+- **Decisão de Integridade:** Armazena `price_at_time` (imutável).  
+  Usa `ON DELETE CASCADE` de orders para limpar os itens.
+
+---
 
 ## Índices para Desempenho
 
--   `idx_orders_user_id`: Essencial para consultas de pedidos por
-    usuário (base do RLS).
--   `idx_orders_status` e `idx_orders_status_created_at`: Otimiza a
-    busca e ordenação de pedidos por status.
--   `idx_products_in_stock` (Partial Index): Filtra produtos que têm
-    `stock_quantity > 0` combinando `category` e `price`, otimizando a
-    exibição do catálogo disponível.
+- `idx_orders_user_id`: Essencial para consultas de pedidos por usuário (base do RLS).  
+- `idx_orders_status` e `idx_orders_status_created_at`: Otimizam a busca e ordenação de pedidos por status.  
+- `idx_products_in_stock`: Partial index que filtra produtos com `stock_quantity > 0`,
+  combinando `category` e `price` para otimizar o catálogo.
+
+---
 
 # 3. Segurança de Dados (Row-Level Security - RLS)
 
-Todas as tabelas críticas (`profiles`, `products`, `orders`,
-`order_items`) têm RLS habilitado. O controle de acesso é dividido entre
-**Clientes** e **Administradores**.
+Todas as tabelas críticas (`profiles`, `products`, `orders`, `order_items`) têm RLS habilitado.
+O controle de acesso é dividido entre **Clientes** e **Administradores**.
 
 ## 3.1. Políticas para Clientes (Baseado em auth.uid())
 
-  ---------------------------------------------------------------------------------------------------------------------------------------------
-  **Tabela**    **Operações            **Condição RLS (Critério de Segurança)**
-                Permitidas**           
-  ------------- ---------------------- --------------------------------------------------------------------------------------------------------
-  profiles      SELECT, INSERT, UPDATE `auth.uid() = id`
+### profiles
+- **Operações:** SELECT, INSERT, UPDATE  
+- **Condição:** `auth.uid() = id`
 
-  orders        SELECT, INSERT, UPDATE `auth.uid() = user_id`
+### orders
+- **Operações:** SELECT, INSERT, UPDATE  
+- **Condição:** `auth.uid() = user_id`
 
-  order_items   SELECT, INSERT, UPDATE `EXISTS (SELECT 1 FROM orders WHERE orders.id = order_items.order_id AND orders.user_id = auth.uid())`
-  ---------------------------------------------------------------------------------------------------------------------------------------------
+### order_items
+- **Operações:** SELECT, INSERT, UPDATE  
+- **Condição:**  
+  ```sql
+  EXISTS (
+    SELECT 1 FROM orders
+    WHERE orders.id = order_items.order_id
+    AND orders.user_id = auth.uid()
+  )
+  ```
 
-**Destaque em Segurança:** A política de `order_items` usa a subconsulta
-EXISTS de forma segura e performática para validar a propriedade
-transitiva do item, assegurando que o usuário só toque em itens que
-fazem parte de seus pedidos.
+> **Destaque:** A política de `order_items` usa `EXISTS` de forma segura e performática,
+> garantindo que o usuário só acesse itens de seus próprios pedidos.
+
+---
 
 ## 3.2. Políticas para Administradores (Baseado em Metadados)
 
--   **Tabela:** `products`
--   **Política:** Apenas administradores podem inserir/atualizar/deletar
-    produtos
--   **Condição:**
-    `auth.uid() IN (SELECT id FROM auth.users WHERE raw_user_meta_data ->> 'role' = 'admin')`
+- **Tabela:** `products`  
+- **Operações:** INSERT, UPDATE, DELETE  
+- **Condição:**  
+  ```sql
+  auth.uid() IN (
+    SELECT id FROM auth.users
+    WHERE raw_user_meta_data ->> 'role' = 'admin'
+  )
+  ```
 
-**Destaque em Segurança:** Essa política restringe o CRUD do catálogo a
-usuários que possuem a claim `role: 'admin'` no objeto de metadados do
-Auth, garantindo a integridade do catálogo. A política SELECT é TRUE
-para que todos possam visualizar o catálogo.
+> **Nota:** A política `SELECT` é `TRUE` para permitir visualização pública do catálogo.
+
+---
 
 # 4. Lógica de Negócio (Funções e Triggers)
 
-A lógica crítica é executada no banco de dados para garantir performance
-e consistência transacional.
+A lógica crítica é executada no banco para garantir performance e consistência transacional.
 
 ### Função: `calculate_order_total(order_id UUID)`
 
 **Objetivo:** Calcular o valor total de um pedido.
 
-``` sql
-SELECT SUM(oi.quantity * oi.price_at_time) INTO order_total FROM order_items oi WHERE oi.order_id = calculate_order_total.order_id;
+```sql
+SELECT SUM(oi.quantity * oi.price_at_time)
+INTO order_total
+FROM order_items oi
+WHERE oi.order_id = calculate_order_total.order_id;
 ```
 
-**Decisão de Desempenho e Segurança:**
+**Decisões:**  
+- **PL/pgSQL:** Ideal para lógica complexa.  
+- **SECURITY DEFINER:** Permite ignorar temporariamente o RLS com privilégios do `postgres`.  
 
--   **PL/pgSQL:** Usada por ser mais robusta para lógica de negócio do
-    que SQL simples.
--   **SECURITY DEFINER:** Permite que a função ignore temporariamente o
-    RLS ao acessar `order_items` (com privilégios de postgres) para
-    garantir o cálculo completo.
+**Aprimoramento sugerido:** Criar um **trigger**
+`AFTER INSERT OR UPDATE ON order_items` que atualize `orders.total` automaticamente.
 
-**Sugestão de Aprimoramento (Trigger):** Implementar um TRIGGER
-`AFTER INSERT OR UPDATE ON order_items` que chame esta função e atualize
-a coluna `orders.total`, mantendo o total sempre sincronizado
-automaticamente.
+---
 
 # 5. Otimização de Consultas (Views)
 
-A View `order_details` simplifica a recuperação de dados complexos para
-o frontend e para as Edge Functions.
+### View: `order_details`
 
-**Objetivo:** Agrupar todos os detalhes de um pedido (cliente, status,
-itens) em um único registro.
+**Objetivo:** Agrupar detalhes de um pedido (cliente, status, itens) em um único registro.
 
-``` sql
-json_agg("json_build_object"(...)) AS "order_items",
+```sql
+json_agg(json_build_object(...)) AS order_items
 GROUP BY o.id, o.user_id, p.full_name, ...
 ```
 
-**Decisão de Desempenho e Código Limpo:**
+**Decisões:**  
+- Usa `json_agg` para reduzir latência e transformar os itens em array JSON.  
+- Simplifica consultas de alto nível ocultando JOINs complexos.
 
--   **json_agg:** Transforma a relação muitos-para-um dos itens em um
-    único array JSON, reduzindo a latência.
--   **Código Limpo:** A View oculta a complexidade dos JOINs, tornando
-    as consultas de alto nível muito mais simples.
+---
 
 # 6. Automação e Integração (Edge Functions - Deno/TypeScript)
 
-As Edge Functions são usadas para automação serverless, aproveitando a
-runtime Deno.
+As Edge Functions são usadas para automação serverless, aproveitando a runtime Deno.
 
 ## 6.1. Edge Function: Envio de E-mail de Confirmação
 
-  -----------------------------------------------------------------------
-  **Feature**          **Implementação**          **Benefício**
-  -------------------- -------------------------- -----------------------
-  Fluxo                Recebe `order_id` e        Processamento
-                       `customer_email`, busca    assíncrono e
-                       detalhes do pedido e       desacoplado do banco.
-                       simula o envio.            
-
-  Segurança            Usa o token de Autorização Garante que o RLS seja
-                       da requisição para buscar  aplicado --- o usuário
-                       dados.                     só pode buscar seus
-                                                  próprios pedidos.
-
-  Desempenho           Consulta a View            Busca rápida e com
-                       `order_details`.           baixa latência.
-  -----------------------------------------------------------------------
+- **Fluxo:** Recebe `order_id` e `customer_email`, busca detalhes e simula envio.  
+- **Segurança:** Usa token do usuário para aplicar RLS.  
+- **Desempenho:** Consulta otimizada via `order_details`.
 
 ## 6.2. Edge Function: Exportação de Pedido em CSV
 
-  -----------------------------------------------------------------------------------------------------------------------------------------
-  **Feature**          **Implementação**                                                                            **Benefício**
-  -------------------- -------------------------------------------------------------------------------------------- -----------------------
-  Busca Otimizada      `supabaseClient.from('orders').select('..., order_items(..., products:product_id(name))')`   Alto desempenho.
-
-  Geração CSV          Lógica manual de `map` e `join` para criar o formato CSV.                                    Código limpo.
-
-  Download             Retorna `Content-Type: text/csv` e `Content-Disposition: attachment; filename="..."`         Permite download direto
-                                                                                                                    e seguro.
-
-  Segurança            RLS Enforced --- a função só gera o CSV se o usuário for o dono ou admin.                    Garante privacidade dos
-                                                                                                                    dados.
-  -----------------------------------------------------------------------------------------------------------------------------------------
+- **URL:** `/generate-order-csv`  
+- **Busca:**  
+  ```ts
+  supabaseClient.from('orders').select('..., order_items(..., products:product_id(name))')
+  ```
+- **Geração CSV:** Feita manualmente via `map` e `join`.  
+- **Download:** Retorna `Content-Type: text/csv` e `Content-Disposition: attachment`.  
+- **Segurança:** Só permite exportação pelo dono do pedido ou admin.
