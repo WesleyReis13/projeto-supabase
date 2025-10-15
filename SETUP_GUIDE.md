@@ -52,7 +52,7 @@ supabase db push
 ### 4. Deploy das Edge Functions
 ```bash
 # Fazer deploy das functions
-supabase functions deploy send-order-confirmation
+supabase functions deploy bright-endpoint
 supabase functions deploy generate-order-csv
 ```
 
