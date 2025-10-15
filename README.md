@@ -24,28 +24,31 @@ Functions (Deno) para automação e tarefas serverless.
 O esquema é normalizado para garantir a integridade dos dados, com UUIDs
 como chaves primárias.
 
-  -------------------------------------------------------------------------------
-  Tabela        Objetivo     Relação Chave Estrangeira   Decisão de Integridade
-  ------------- ------------ --------------------------- ------------------------
-  profiles      Dados        id -\> auth.users(id)       Usado ON DELETE CASCADE
-                adicionais   (One-to-One)                para limpar o perfil
-                do usuário.                              caso o usuário seja
-                                                         deletado da Auth.
+  -----------------------------------------------------------------------------------
+  **Tabela**    **Objetivo**   **Relação Chave Estrangeira**  **Decisão de
+                                                              Integridade**
+  ------------- -------------- ------------------------------ -----------------------
+  profiles      Dados          `id -> auth.users(id)`         `ON DELETE CASCADE`
+                adicionais do  (One-to-One)                   para limpar o perfil
+                usuário                                       caso o usuário seja
+                                                              deletado da Auth.
 
-  products      Catálogo de  N/A                         Constraints: price \>= 0
-                produtos.                                e stock_quantity \>= 0
-                                                         garantem integridade dos
-                                                         valores.
+  products      Catálogo de    ---                            `price >= 0` e
+                produtos                                      `stock_quantity >= 0`
+                                                              garantem integridade
+                                                              dos valores.
 
-  orders        Cabeçalho do user_id -\> profiles(id)    Constraint para status
-                pedido.                                  (pending, confirmed,
-                                                         etc.) e total \>= 0.
+  orders        Cabeçalho do   `user_id -> profiles(id)`      Constraint para status
+                pedido                                        (`pending`,
+                                                              `confirmed`, etc.) e
+                                                              `total >= 0`.
 
-  order_items   Itens de     order_id -\> orders(id),    Armazena price_at_time
-                cada pedido. product_id -\> products(id) (imutável). ON DELETE
-                                                         CASCADE de orders limpa
-                                                         os itens.
-  -------------------------------------------------------------------------------
+  order_items   Itens de cada  `order_id -> orders(id)`,      Armazena
+                pedido         `product_id -> products(id)`   `price_at_time`
+                                                              (imutável).
+                                                              `ON DELETE CASCADE`
+                                                              limpa os itens.
+  -----------------------------------------------------------------------------------
 
 ## Índices para Desempenho
 
@@ -65,17 +68,16 @@ Todas as tabelas críticas (`profiles`, `products`, `orders`,
 
 ## 3.1. Políticas para Clientes (Baseado em auth.uid())
 
-  ----------------------------------------------------------------------------
-  Tabela        Operações Permitidas   Condição RLS (Critério de Segurança)
-  ------------- ---------------------- ---------------------------------------
-  profiles      SELECT, INSERT, UPDATE auth.uid() = id
+  ---------------------------------------------------------------------------------------------------------------------------------------------
+  **Tabela**    **Operações            **Condição RLS (Critério de Segurança)**
+                Permitidas**           
+  ------------- ---------------------- --------------------------------------------------------------------------------------------------------
+  profiles      SELECT, INSERT, UPDATE `auth.uid() = id`
 
-  orders        SELECT, INSERT, UPDATE auth.uid() = user_id
+  orders        SELECT, INSERT, UPDATE `auth.uid() = user_id`
 
-  order_items   SELECT, INSERT, UPDATE EXISTS (SELECT 1 FROM orders WHERE
-                                       orders.id = order_items.order_id AND
-                                       orders.user_id = auth.uid())
-  ----------------------------------------------------------------------------
+  order_items   SELECT, INSERT, UPDATE `EXISTS (SELECT 1 FROM orders WHERE orders.id = order_items.order_id AND orders.user_id = auth.uid())`
+  ---------------------------------------------------------------------------------------------------------------------------------------------
 
 **Destaque em Segurança:** A política de `order_items` usa a subconsulta
 EXISTS de forma segura e performática para validar a propriedade
@@ -149,36 +151,34 @@ runtime Deno.
 ## 6.1. Edge Function: Envio de E-mail de Confirmação
 
   -----------------------------------------------------------------------
-  Feature            Implementação                 Benefício
-  ------------------ ----------------------------- ----------------------
-  Fluxo              Recebe `order_id` e           Processamento
-                     `customer_email`, busca       assíncrono e
-                     detalhes do pedido e simula o desacoplado do banco
-                     envio.                        de dados.
+  **Feature**          **Implementação**          **Benefício**
+  -------------------- -------------------------- -----------------------
+  Fluxo                Recebe `order_id` e        Processamento
+                       `customer_email`, busca    assíncrono e
+                       detalhes do pedido e       desacoplado do banco.
+                       simula o envio.            
 
-  Segurança          Usa o token de Autorização da Garante que o RLS seja
-                     requisição para buscar dados. aplicado: o usuário só
-                                                   pode buscar seus
-                                                   próprios pedidos.
+  Segurança            Usa o token de Autorização Garante que o RLS seja
+                       da requisição para buscar  aplicado --- o usuário
+                       dados.                     só pode buscar seus
+                                                  próprios pedidos.
 
-  Desempenho         Consulta a View               Busca rápida e com
-                     `order_details`.              baixa latência.
+  Desempenho           Consulta a View            Busca rápida e com
+                       `order_details`.           baixa latência.
   -----------------------------------------------------------------------
 
 ## 6.2. Edge Function: Exportação de Pedido em CSV
 
--   **URL:** `/generate-order-csv`
+  -----------------------------------------------------------------------------------------------------------------------------------------
+  **Feature**          **Implementação**                                                                            **Benefício**
+  -------------------- -------------------------------------------------------------------------------------------- -----------------------
+  Busca Otimizada      `supabaseClient.from('orders').select('..., order_items(..., products:product_id(name))')`   Alto desempenho.
 
-  --------------------------------------------------------------------------------------------------------------------------------------
-  Feature            Implementação                                                                                Benefício
-  ------------------ -------------------------------------------------------------------------------------------- ----------------------
-  Busca Otimizada    `supabaseClient.from('orders').select('..., order_items(..., products:product_id(name))')`   Alto desempenho.
+  Geração CSV          Lógica manual de `map` e `join` para criar o formato CSV.                                    Código limpo.
 
-  Geração CSV        Lógica manual de map e join para criar o formato CSV.                                        Código limpo.
+  Download             Retorna `Content-Type: text/csv` e `Content-Disposition: attachment; filename="..."`         Permite download direto
+                                                                                                                    e seguro.
 
-  Download           Retorna `Content-Type: text/csv` e `Content-Disposition: attachment; filename="..."`         Permite download
-                                                                                                                  direto e seguro.
-
-  Segurança          RLS Enforced: a função só gera o CSV se o usuário for o dono ou admin.                       Garante privacidade
-                                                                                                                  dos dados.
-  --------------------------------------------------------------------------------------------------------------------------------------
+  Segurança            RLS Enforced --- a função só gera o CSV se o usuário for o dono ou admin.                    Garante privacidade dos
+                                                                                                                    dados.
+  -----------------------------------------------------------------------------------------------------------------------------------------
